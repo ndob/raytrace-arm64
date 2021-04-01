@@ -1,5 +1,5 @@
 TOOLPATH = /usr/aarch64-linux-gnu/bin
-OBJS = raytrace.o
+OBJS = raytrace.o main.o
 
 %.o : %.s
 	aarch64-linux-gnu-as -g $< -o $@
@@ -9,7 +9,9 @@ OBJS = raytrace.o
 
 raytrace: $(OBJS)
 	aarch64-linux-gnu-ld -o raytrace $(OBJS)
+
 clean:
-	rm raytrace ; rm raytrace.o
+	rm raytrace ; rm *.o
+
 run: raytrace
 	qemu-aarch64 ./raytrace

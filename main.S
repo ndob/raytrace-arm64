@@ -37,31 +37,14 @@
     svc     0                   // Call
 .endm
 
-raytrace:
-    mov     X1, #PBUF_HEIGHT        // Row iterator init
-
-rt_loop_rows:
-    mov     X2, #PBUF_WIDTH         // Column iterator init
-    mov     X3, #PBUF_HEIGHT        // Save height
-    sub     X3, X3, X1              // Current row index
-    mov     X4, #PBUF_WIDTH         // Stride
-    mul     X3, X3, X4              // Row*stride
-    ldr     X4, =pbuf               // Load the pbuf address. (reuse X4)
-    add     X4, X4, X3              // Offset rows*stride from pbuf address start.
-
-rt_loop_columns:
-    mov     X5, X1                  // Pixel value. Row iterator for testing purposes, so we get a gradient.
-    strb    W5, [X4], #1            // Save the pixel and move the pointer by one.
-    subs    X2, X2, #1              // Decrement column iterator.
-    b.ne    rt_loop_columns         // Check if we have columns left.
-    subs    X1, X1, #1              // Decrement column iterator.
-    b.ne    rt_loop_rows            // Check if we have rows left.
-
-    ret                             // Return to caller
-
 // Main entry point
 _start:
+    ldr     X0, =pbuf           // 1. parameter.
+    mov     X1, #PBUF_WIDTH     // 2. parameter.
+    mov     X2, #PBUF_HEIGHT    // 3. parameter.
     bl      raytrace
+
+// File output
     openFile    filename, O_WRONLY+O_CREAT  // Open file.
     mov     X19, X0                         // Save fd for closing.
     ldr     X2, =ppm_header_sz              // Load header size address to X2.
