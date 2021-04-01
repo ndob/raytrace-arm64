@@ -3,13 +3,13 @@
 
 .global _start
 
-.equ    O_WRONLY, 1
-.equ    O_CREAT,  0100
-.equ    S_RDWR,   0666
-.equ    AT_FDCWD, -100
-.equ    PBUF_WIDTH, 200
-.equ    PBUF_HEIGHT, 100
-.equ    PBUF_SIZE, 20000 // PBUF_WIDTH * PBUF_HEIGHT
+.equ    O_WRONLY, 1         // Linux file handling constant.
+.equ    O_CREAT,  0100      // Linux file handling constant.
+.equ    S_RDWR,   0666      // Linux file handling constant.
+.equ    AT_FDCWD, -100      // Linux file handling constant.
+.equ    PBUF_WIDTH, 200     // Pixel buffer width.
+.equ    PBUF_HEIGHT, 100    // Pixel buffer height.
+.equ    PBUF_SIZE, 20000    // PBUF_WIDTH * PBUF_HEIGHT
 
 .macro openFile     fname, flags
     mov     X0, #AT_FDCWD       // Search root is CWD.
@@ -44,13 +44,13 @@ _start:
     mov     X2, #PBUF_HEIGHT    // 3. parameter.
     bl      raytrace
 
-// File output
+    // File output
     openFile    filename, O_WRONLY+O_CREAT  // Open file.
     mov     X19, X0                         // Save fd for closing.
     ldr     X2, =ppm_header_sz              // Load header size address to X2.
     ldr     W2, [X2]                        // Load header size to W2 (i.e. X2 lower part).
     writeFile   X19, ppm_header, X2         // Write the header (X19=fd, X2=header size).
-// Write pbuf to ppm file.
+    // Write pbuf to ppm file.
     mov     X20, #PBUF_HEIGHT
 loop_rows:
     mov     X21, #PBUF_WIDTH                // Column iterator init
