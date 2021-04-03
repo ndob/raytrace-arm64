@@ -1,18 +1,24 @@
 .global raytrace                    // Export function.
 
-.equ RT_STACK_PBUF_ADDR, 0          // Stack offset for pbuffer address.
-.equ RT_STACK_PBUF_WIDTH, 8         // Stack offset for pbuffer width.
-.equ RT_STACK_PBUF_HEIGHT, 12       // Stack offset for pbuffer height.
-.equ RT_STACK_ROW_ITERATOR, 16      // Stack offset for pbuffer row iterator.
-.equ RT_STACK_COLUMN_ITERATOR, 20   // Stack offset for pbuffer column iterator.
+// raytrace stack offsets.
+.equ RT_STACK_PBUF_ADDR,        0
+.equ RT_STACK_PBUF_WIDTH,       8
+.equ RT_STACK_PBUF_HEIGHT,      12
+.equ RT_STACK_ROW_ITERATOR,     16
+.equ RT_STACK_COLUMN_ITERATOR,  20
+.equ RT_STACK_ROW_START_PTR,    24
 
-// Hit world stack.
-.equ HITW_STACK_DIRECTION, 0
-.equ HITW_STACK_ORIGIN, 16
-.equ HITW_STACK_HIT0_NORMAL, 32
-.equ HITW_STACK_HIT0_POINT, 48
-.equ HITW_STACK_HIT0_T, 64
-.equ HITW_STACK_HIT0_TRUE, 68
+// trace stack offsets.
+.equ TRACE_STACK_DIRECTION,      0
+.equ TRACE_STACK_ORIGIN,         16
+
+// hit_world stack offsets.
+.equ HITW_STACK_DIRECTION,      0
+.equ HITW_STACK_ORIGIN,         16
+.equ HITW_STACK_HIT0_NORMAL,    32
+.equ HITW_STACK_HIT0_POINT,     48
+.equ HITW_STACK_HIT0_T,         64
+.equ HITW_STACK_HIT0_TRUE,      68
 
 .macro funcProlog
     str     LR, [SP, #-16]!         // Push link register on to stack.
@@ -28,6 +34,29 @@
     fmul    \destReg, \srcReg0, \srcReg1    // Multiply elementwise.
     faddp   \destReg, \destReg, \destReg    // Reduce sums to first two elements.
     faddp   \destReg, \destReg, \destReg    // Reduce the final dot product to first 32 element of V5
+.endm
+
+// Linear congruential generator with Microsoft constants.
+// Generates floating point values between 0 and 1.
+//
+// Uses regs: X8, X9, X11, X12, X13, S7
+// Saves the result in dest.
+.macro lgc_generate_float01 dest
+    ldr     X8, =lcg_state      // Load the current state.
+    ldr     W9, [X8]            //
+    ldr     X11, =lcg_a         // Load 'a'.
+    ldr     W11, [X11]          //
+    ldr     X12, =lcg_c         // Load 'c'.
+    ldr     W12, [X12]          //
+    ldr     X13, =lcg_mod       // Load 'mod'.
+    ldr     W13, [X13]          //
+    mul     W9, W9, W11         // cur_state * a
+    add     W9, W9, W12         // cur_state * a + c
+    str     W9, [X8]            // Store next state
+    lsr     W9, W9, #17         // new value next_state % mod(32767)
+    scvtf   \dest, W9           // Save new value to dest.
+    scvtf   S7, W13             // Save mod value.
+    fdiv    \dest, \dest, S7    // Divide new value with max to get [0,1].
 .endm
 
 //
@@ -49,7 +78,7 @@ rt_loop_rows:
     ldr     W9, [SP, #RT_STACK_PBUF_WIDTH]      // Column iterator init
     ldr     W2, [SP, #RT_STACK_PBUF_HEIGHT]     // Load height.
     sub     X10, X2, X8                         // Current row index: height - row-iterator
-    mul     X10, X10, X1                        // Row*stride (==width in this case).
+    mul     X10, X10, X9                        // Row*stride (==width in this case).
     ldr     X0, [SP, #RT_STACK_PBUF_ADDR]       // Load pbuffer start address.
     add     X10, X0, X10                        // Offset rows*stride from pbuf address start -> start address of the current row.
 
@@ -57,6 +86,7 @@ rt_loop_columns:
     // Prepare and call get_pixel_val
     str     W8, [SP, #RT_STACK_ROW_ITERATOR]    // Save iterator
     str     W9, [SP, #RT_STACK_COLUMN_ITERATOR] // Save iterator
+    str     X10, [SP, #RT_STACK_ROW_START_PTR]  // Save row start ptr.
     fmov    S0, W9                              // Param 1: Cur pixel x
     fmov    S1, W8                              // Param 2: Cur pixel y
     ldr     W2, [SP, #RT_STACK_PBUF_WIDTH]
@@ -67,6 +97,7 @@ rt_loop_columns:
     // Handle return value.
     ldr     W8, [SP, #RT_STACK_ROW_ITERATOR]    // Restore iterator from the stack.
     ldr     W9, [SP, #RT_STACK_COLUMN_ITERATOR] // Restore iterator from the stack.
+    ldr     X10, [SP, #RT_STACK_ROW_START_PTR] // Restore iterator from the stack.
     mov     X11, X0                             // Returned pixel value.
     strb    W11, [X10], #1                      // Save the pixel and move the pointer by one.
     subs    X9, X9, #1                          // Decrement column iterator.
@@ -157,23 +188,33 @@ normalize:
 //
 trace:
     funcProlog
+    sub     SP, SP, #32                     // Allocate space for direction (16), origin (16)
+
     // Q0 (direction) and Q1 (origin) are already set by the caller.
-    bl      hit_world               // Call function.
-    cmp     X0, 0                   // Check if we got a hit.
-    b.le    ret_default_val         // If the result is 1 we got a hit.
-    fadd    V0.4S, V1.4S, V0.4S     // New target point: hitpoint + normal + random
-    ldr     X0, =random_placeholder // Use random placeholder for now. TODO: Real pseudorandom.
-    ldr     Q7, [X0]                // Load the placeholder.
-    fadd    V0.4S, V0.4S, V7.4S     // Final target.
+    bl      hit_world                       // Call function.
+    cmp     X0, 0                           // Check if we got a hit.
+    b.le    ret_default_val                 // If the result is 1 we got a hit.
+    fadd    V0.4S, V1.4S, V0.4S             // New target point: hitpoint + normal + random
+    str     Q0, [SP, #TRACE_STACK_DIRECTION]// Save direction.
+    str     Q1, [SP, #TRACE_STACK_ORIGIN]   // Save origin.
+    bl      generate_random_sphere          // Get a new random sphere in Q0 (V0).
+    mov     V7.16B, V0.16B                  // Copy to V7.
+    ldr     Q0, [SP, #TRACE_STACK_DIRECTION]// Restore direction.
+    ldr     Q1, [SP, #TRACE_STACK_ORIGIN]   // Restore origin.
+    fadd    V0.4S, V0.4S, V7.4S             // Add random to direction.
     // Hitpoint is the new origin. It is already in Q1.
     bl      trace                   // Call trace recursively for next intensity.
     ldr     X0, =hit_multiplier     //
     ldr     S1, [X0]                // Load multiplier to S1.
     fmul    S0, S0, S1              // Multiplier * intensity.
+
+    add     SP, SP, #32             // Deallocate stack.
     funcEpilog
 ret_default_val:
     ldr     X0, =default_bg_val     //
     ldr     S0, [X0]                // Load default background value to return address and return.
+
+    add     SP, SP, #32             // Deallocate stack.
     funcEpilog
 
 //
@@ -312,17 +353,58 @@ hit_sphere:
 hit_exit:
     funcEpilog
 
+//
+// Generate a random vector that is within a sphere of radius 1.
+// No parameters
+//
+// Returns
+// Q0: Random vector xyz as 32bit floats (last channel empty).
+//
+generate_random_sphere:
+    funcProlog
+loop_random_vec:
+    lgc_generate_float01    S1  // Generate the first value between [0, 1].
+    fmov    W1, S1              // Load to register.
+    mov     V8.4S[0], W1        // Load to V8[0].
+    lgc_generate_float01    S1  // Generate the second value between [0, 1].
+    fmov    W1, S1              // Load to register.
+    mov     V8.4S[1], W1        // Load to V8[1].
+    lgc_generate_float01    S1  // Generate the third value between [0, 1].
+    fmov    W1, S1              // Load to register.
+    mov     V8.4S[2], W1        // Load to V8[2].
+    mov     X0, #0              // Load zero.
+    mov     V8.4S[3], W0        // Clear V8[3] with zero.
+    fmov    S1, #2.0            // Load 2.0f
+    dup     V1.4S, V1.4S[0]     // Duplicate 2.0 to all elements.
+    fmul    V8.4S, V8.4S, V1.4S // Multiply by two to get diameter.
+    fmov    S1, #1.0            // Load 1.0f.
+    dup     V1.4S, V1.4S[0]     // Duplicate 1.0f to all elements.
+    fsub    V8.4S, V8.4S, V1.4S // Subtract radius.
+    // Calculate vector length to V9.
+    fmul    V9.4S, V8.4S, V8.4S // Power 2.
+    faddp   V9.4S, V9.4S, V9.4S // Add x^2 + y^2 + z^2 and store to first 2 32bit element of V9.
+    faddp   V9.4S, V9.4S, V9.4S // Reduce the length (i.e. sum) to first 32bit element of V9.
+    fsqrt   S9, S9              // Length in S9.
+    fmov    S1, #1.0            // Load 1.0f
+    fcmp    S9, S1              // Check if length is below 1.
+    b.le    loop_random_vec     // Loop until we get a vector that is shorter than 1.
+    mov     V0.16B, V8.16B      // Result to Q0 (V0).
+    funcEpilog
 
 .data
 ray_origin:             .single 0.0, 0.0, 0.0, 0.0          // Ray origin position.
 screen_bottom_left:     .single -2.0, -1.0, -1.0, 0.0       // Camera bottom left coordinate.
 x_size:                 .single 4.0, 0.0, 0.0, 0.0          // Camera viewport X size.
 y_size:                 .single 0.0, 2.0, 0.0, 0.0          // Camera viewport Y size.
-default_bg_val:         .single 0.9                         // Default intensity if no hit.
-hit_multiplier:         .single 0.2                         // Hit multiplier.
+default_bg_val:         .single 0.4                         // Default intensity if no hit.
+hit_multiplier:         .single 0.5                         // Hit multiplier.
 sphere0_pos:            .single 0.0, 0.0, -1.0, 0.0         // Sphere0 position.
 sphere0_radius:         .single 0.5                         // Sphere0 radius.
 sphere1_pos:            .single 0.0, -100.5, -1.0, 0.0      // Sphere1 position.
 sphere1_radius:         .single 100.0                       // Sphere1 radius.
 intensity_multiplier:   .single 255.0                       // Multiplier from normalized values [0, 1] to [0, 255].
 random_placeholder:     .single 0.8, 0.8, 0.3, 0.0          // Placeholder vector, before random is implemented.
+lcg_state:              .word 474743                        // Linear congruential generator seed.
+lcg_a:                  .word 214013                        // Linear congruential generator a.
+lcg_c:                  .word 2531011                       // Linear congruential generator c.
+lcg_mod:                .word 32767                         // Linear congruential generator mod.
