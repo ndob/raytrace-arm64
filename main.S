@@ -104,7 +104,7 @@ loop_columns:
 filename:           .asciz "outfile.ppm"
 ppm_header:         .ascii "P2\n200 100\n255\n"     // Grayscale PPM.
 ppm_header_sz:      .word .-ppm_header              // '.' denotes "this address" -> [this address] - [start address of the string] = size
-pbuf:               .fill   PBUF_SIZE, 1, 0         // Fill buffer with zeros.
+pbuf:               .fill PBUF_SIZE, 1, 0         // Fill buffer with zeros.
 pbuf_sz:            .word .-pbuf
-pixel_str:          .fill   4, 1, 0x20              // Fill with spaces
+pixel_str:          .fill 4, 1, 0x20              // Fill with spaces
 pixel_str_sz:       .word .-pixel_str
